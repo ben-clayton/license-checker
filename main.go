@@ -109,7 +109,7 @@ func (l *searchRules) UnmarshalJSON(body []byte) error {
 		if len(rule.Include) > 0 {
 			*l = append(*l, func(root, absPath string, cond bool) bool {
 				for _, pattern := range rule.Include {
-					if ok, _ := path.Match(path.Join(root, pattern), absPath); ok {
+					if ok, err := path.Match(path.Join(root, pattern), absPath); err == nil && ok {
 						return true
 					}
 				}
@@ -119,7 +119,7 @@ func (l *searchRules) UnmarshalJSON(body []byte) error {
 		if len(rule.Exclude) > 0 {
 			*l = append(*l, func(root, absPath string, cond bool) bool {
 				for _, pattern := range rule.Exclude {
-					if ok, _ := path.Match(path.Join(root, pattern), absPath); ok {
+					if ok, err := path.Match(path.Join(root, pattern), absPath); err == nil && ok {
 						return false
 					}
 				}
@@ -156,7 +156,10 @@ func (c Config) allowsLicense(name string) bool {
 // cwd returns the current working directory, or an empty string if it cannot
 // be determined.
 func cwd() string {
-	wd, _ := os.Getwd()
+	wd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
 	return wd
 }
 
@@ -189,7 +192,7 @@ func run() error {
 
 	fmt.Printf("Scanning %d files...\n", len(files))
 
-	wg := sync.WaitGroup{}
+	var wg sync.WaitGroup
 	errs := make([]error, len(files))
 	for i, file := range files {
 		i, file := i, file
@@ -210,9 +213,9 @@ func run() error {
 			fmt.Fprintf(&msg, "* %v\n", err)
 		}
 		return fmt.Errorf("%v", msg.String())
-	} else {
-		fmt.Printf("No license issues found\n")
 	}
+
+	fmt.Printf("No license issues found\n")
 
 	return nil
 }
@@ -285,18 +288,17 @@ func examine(root, path string, cfg Config) error {
 			return fmt.Errorf("%v uses unsupported license '%v'", path, match.Name)
 		}
 	}
-	_ = cov
 	return nil
 }
 
-// removeNilErrs returns the slice errs with all the nil errors removed.
+// removeNilErrs returns a new slice with all the non-nil errors of errs
+// removed.
 func removeNilErrs(errs []error) []error {
-	c := 0
+	var out []error
 	for _, err := range errs {
 		if err != nil {
-			errs[c] = err
-			c++
+			out = append(out, err)
 		}
 	}
-	return errs[:c]
+	return out
 }
