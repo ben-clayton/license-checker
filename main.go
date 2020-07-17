@@ -42,6 +42,9 @@ const (
 	licensecheckCfgPath = "license-checker.cfg"
 )
 
+// Configs is a slice of Config.
+type Configs []Config
+
 // Config is used to parse the JSON configuration file at licensecheckCfgPath.
 type Config struct {
 	// Paths holds a number of JSON objects that contain either a "includes" or
@@ -163,7 +166,6 @@ func (c Config) shouldExamine(root, absPath string) bool {
 	for _, rule := range c.Paths {
 		res = rule(relPath, res)
 	}
-
 	return res
 }
 
@@ -192,27 +194,47 @@ func cwd() string {
 func main() {
 	flag.Parse()
 	if err := run(); err != nil {
-		fmt.Fprintf(os.Stderr, "%v", err)
+		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(1)
 	}
 }
 
-// run loads the config, gathers the source files, scans them for their
-// licenses, and returns an error if any license violations are found.
+// run loads the configs, calls runConfig() on each, and reports any  license
+// violations are found.
 func run() error {
 	root, err := filepath.Abs(*wd)
 	if err != nil {
 		return fmt.Errorf("Failed to get absolute working directory: %w", err)
 	}
 
-	cfg, err := loadConfig(root)
+	cfgs, err := loadConfigs(root)
 	if err != nil {
 		return fmt.Errorf("Failed to load config file: %w", err)
 	}
 
+	for _, cfg := range cfgs {
+		errs := runConfig(cfg, root)
+		if len(errs) > 0 {
+			msg := strings.Builder{}
+			fmt.Fprintf(&msg, "%d errors:\n", len(errs))
+			for _, err := range errs {
+				fmt.Fprintf(&msg, "* %v\n", err)
+			}
+			return fmt.Errorf("%v", msg.String())
+		}
+	}
+
+	fmt.Printf("No license issues found\n")
+
+	return nil
+}
+
+// runConfig gathers the source files listed in the config, scans them for their
+// licenses, and returns an error if any license violations are found.
+func runConfig(cfg Config, root string) []error {
 	files, err := gatherFiles(root, cfg)
 	if err != nil {
-		return fmt.Errorf("Failed to gather files: %w", err)
+		return []error{fmt.Errorf("Failed to gather files: %w", err)}
 	}
 
 	fmt.Printf("Scanning %d files...\n", len(files))
@@ -229,35 +251,33 @@ func run() error {
 	}
 	wg.Wait()
 
-	errs = removeNilErrs(errs)
-
-	if len(errs) > 0 {
-		msg := strings.Builder{}
-		fmt.Fprintf(&msg, "%d errors:\n", len(errs))
-		for _, err := range errs {
-			fmt.Fprintf(&msg, "* %v\n", err)
-		}
-		return fmt.Errorf("%v", msg.String())
-	}
-
-	fmt.Printf("No license issues found\n")
-
-	return nil
+	return removeNilErrs(errs)
 }
 
-// loadConfig attempts to load the config file, returning the config if found,
+// loadConfigs attempts to load the config file, returning the config if found,
 // otherwise a default-initialized config.
-func loadConfig(root string) (Config, error) {
+func loadConfigs(root string) (Configs, error) {
 	path := filepath.Join(root, licensecheckCfgPath)
 	cfgBody, err := ioutil.ReadFile(path)
 	if err != nil {
-		return Config{}, nil
+		return nil, nil
 	}
-	cfg := Config{}
-	if err := json.NewDecoder(bytes.NewReader(cfgBody)).Decode(&cfg); err != nil {
-		return Config{}, err
+	d := json.NewDecoder(bytes.NewReader(cfgBody))
+	cfgs := Configs{}
+	if strings.HasPrefix(strings.TrimLeft(string(cfgBody), " \n\t"), "{") {
+		// Single config
+		cfg := Config{}
+		if err := d.Decode(&cfg); err != nil {
+			return nil, err
+		}
+		cfgs = append(cfgs, cfg)
+	} else {
+		// Multiple configs
+		if err := d.Decode(&cfgs); err != nil {
+			return nil, err
+		}
 	}
-	return cfg, nil
+	return cfgs, nil
 }
 
 // gatherFiles walks all files and subdirectories from root, returning those
