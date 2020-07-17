@@ -29,11 +29,11 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
-	"path"
 	"path/filepath"
 	"strings"
 	"sync"
 
+	"./match"
 	"github.com/google/licensecheck"
 )
 
@@ -46,9 +46,12 @@ const (
 type Config struct {
 	// Paths holds a number of JSON objects that contain either a "includes" or
 	// "excludes" key to an array of path patterns.
-	// Each path pattern is processed my the path.Match() function
-	// (https://golang.org/pkg/path/#Match) to either include or exclude the
-	// file path for license scanning.
+	// Each path pattern is considered in turn to either include or exclude the
+	// file path for license scanning. Pattern use forward-slashes '/' for
+	// directory separators, and may use the following wildcards:
+	//  ?  - matches any single non-separator character
+	//  *  - matches any sequence of non-separator characters
+	//  ** - matches any sequence of characters including separators
 	//
 	// Rules are processed in the order in which they are declared, with later
 	// rules taking precedence over earlier rules.
@@ -81,10 +84,9 @@ var (
 )
 
 // rule is a search path predicate.
-// root is the project root directory.
-// absPath is the '/' directory-delimited absolute path to the file.
+// root is the project relative path.
 // cond is the value to return if the rule doesn't either include or exclude.
-type rule func(root, absPath string, cond bool) bool
+type rule func(path string, cond bool) bool
 
 // searchRules is a ordered list of search rules.
 // searchRules is its own type as it has to perform custom JSON unmarshalling.
@@ -107,9 +109,17 @@ func (l *searchRules) UnmarshalJSON(body []byte) error {
 	for _, rule := range p {
 		rule := rule
 		if len(rule.Include) > 0 {
-			*l = append(*l, func(root, absPath string, cond bool) bool {
-				for _, pattern := range rule.Include {
-					if ok, err := path.Match(path.Join(root, pattern), absPath); err == nil && ok {
+			tests := make([]match.Test, len(rule.Include))
+			for i, pattern := range rule.Include {
+				test, err := match.New(pattern)
+				if err != nil {
+					return err
+				}
+				tests[i] = test
+			}
+			*l = append(*l, func(path string, cond bool) bool {
+				for _, test := range tests {
+					if test(path) {
 						return true
 					}
 				}
@@ -117,9 +127,17 @@ func (l *searchRules) UnmarshalJSON(body []byte) error {
 			})
 		}
 		if len(rule.Exclude) > 0 {
-			*l = append(*l, func(root, absPath string, cond bool) bool {
-				for _, pattern := range rule.Exclude {
-					if ok, err := path.Match(path.Join(root, pattern), absPath); err == nil && ok {
+			tests := make([]match.Test, len(rule.Exclude))
+			for i, pattern := range rule.Exclude {
+				test, err := match.New(pattern)
+				if err != nil {
+					return err
+				}
+				tests[i] = test
+			}
+			*l = append(*l, func(path string, cond bool) bool {
+				for _, test := range tests {
+					if test(path) {
 						return false
 					}
 				}
@@ -134,11 +152,16 @@ func (l *searchRules) UnmarshalJSON(body []byte) error {
 func (c Config) shouldExamine(root, absPath string) bool {
 	root = filepath.ToSlash(root)       // Canonicalize
 	absPath = filepath.ToSlash(absPath) // Canonicalize
+	relPath, err := filepath.Rel(root, absPath)
+	if err != nil {
+		return false
+	}
 
 	res := true
 	for _, rule := range c.Paths {
-		res = rule(root, absPath, res)
+		res = rule(relPath, res)
 	}
+
 	return res
 }
 
@@ -253,9 +276,6 @@ func gatherFiles(root string, cfg Config) ([]string, error) {
 		}
 
 		if !cfg.shouldExamine(root, path) {
-			if info.IsDir() {
-				return filepath.SkipDir
-			}
 			return nil
 		}
 
