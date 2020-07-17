@@ -108,7 +108,10 @@ func (l *searchRules) UnmarshalJSON(body []byte) error {
 	*l = searchRules{}
 	for _, rule := range p {
 		rule := rule
-		if len(rule.Include) > 0 {
+		switch {
+		case len(rule.Include) > 0 && len(rule.Exclude) > 0:
+			return fmt.Errorf("Rule cannot contain both include and exclude")
+		case len(rule.Include) > 0:
 			tests := make([]match.Test, len(rule.Include))
 			for i, pattern := range rule.Include {
 				test, err := match.New(pattern)
@@ -125,8 +128,7 @@ func (l *searchRules) UnmarshalJSON(body []byte) error {
 				}
 				return cond
 			})
-		}
-		if len(rule.Exclude) > 0 {
+		case len(rule.Exclude) > 0:
 			tests := make([]match.Test, len(rule.Exclude))
 			for i, pattern := range rule.Exclude {
 				test, err := match.New(pattern)
