@@ -34,13 +34,22 @@ type Test func(path string) bool
 //  *  - matches any sequence of non-separator characters
 //  ** - matches any sequence of characters including separators
 func New(pattern string) (Test, error) {
+	// Transform pattern into a regex by replacing the uses of `?`, `*`, `**`
+	// with corresponding regex patterns.
+	// As the pattern may contain other regex sequences, the string has to be
+	// escaped. So:
+	// a) Replace the patterns of `?`, `*`, `**` with unique placeholder tokens.
+	// b) Escape the expression so that other sequences don't confuse the regex
+	//    parser.
+	// c) Replace the placeholder tokens with the corresponding regex tokens.
+
 	// Temporary placeholder tokens
 	const (
 		starstar     = "••"
 		star         = "•"
 		questionmark = "¿"
 	)
-	// Check pattern doens't contain any of our placeholder tokens
+	// Check pattern doesn't contain any of our placeholder tokens
 	for _, r := range []rune{'•', '¿'} {
 		if strings.ContainsRune(pattern, r) {
 			return nil, fmt.Errorf("Pattern must not contain '%c'", r)
@@ -53,7 +62,7 @@ func New(pattern string) (Test, error) {
 	subbed = strings.ReplaceAll(subbed, "?", questionmark)
 	// Escape any remaining regex characters
 	escaped := regexp.QuoteMeta(subbed)
-	// Insert regex matchers foor the subtituted tokens
+	// Insert regex matchers for the subtituted tokens
 	regex := "^" + escaped + "$"
 	regex = strings.ReplaceAll(regex, starstar, ".*")
 	regex = strings.ReplaceAll(regex, star, "[^/]*")
